@@ -11,7 +11,7 @@ const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const TEXT_API = "https://text.pollinations.ai/";
 const IMAGE_API = "https://image.pollinations.ai/prompt/";
 
-const BOT_USERNAME = "blackchat_telegram_bot";
+const BOT_USERNAME = "BlackChatAI_Bot";
 
 // memory per user
 const memory = new Map();
