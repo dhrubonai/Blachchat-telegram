@@ -4,34 +4,44 @@ import fetch from "node-fetch";
 const app = express();
 app.use(express.json());
 
-// ⚠️ HARD-CODED TOKEN (rotate later)
+//  BOT TOKEN (rotate later)
 const BOT_TOKEN = "8011194756:AAGyKwXUjKvamH3hzsMNNwiQW_N8ChfA608";
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
-// Pollinations APIs
 const TEXT_API = "https://text.pollinations.ai/";
 const IMAGE_API = "https://image.pollinations.ai/prompt/";
 
-// Simple in-memory chat memory
+const BOT_USERNAME = "blackchat_telegram_bot";
+
+// memory per user
 const memory = new Map();
 
-// System prompt
-function systemPrompt() {
-  return `
-You are Black Chat.
-Creator: Mohiuddin Abdul Kadir Dhrubo.
-Reply in Bangla if input is Bangla, otherwise English.
-Style: short, friendly, human, not robotic.
-Never mention Pollinations or AI sources.
-`.trim();
+/* ---------------- HELPERS ---------------- */
+
+function isGroup(chat) {
+  return chat.type === "group" || chat.type === "supergroup";
 }
 
-// Detect Bangla
+function shouldReply(msg) {
+  const text = (msg.text || "").toLowerCase();
+
+  if (!isGroup(msg.chat)) return true;
+  if (text.includes(`@${BOT_USERNAME.toLowerCase()}`)) return true;
+  if (text.includes("black chat")) return true;
+  if (msg.reply_to_message && msg.reply_to_message.from?.is_bot) return true;
+
+  return false;
+}
+
 function isBangla(text) {
   return /[\u0980-\u09FF]/.test(text);
 }
 
-// Clean branding
+function isImageRequest(text) {
+  return /^(imagine|draw|generate|create|make)\b/i.test(text)
+    || text.toLowerCase().startsWith("imagine");
+}
+
 function cleanText(text) {
   return text
     .replace(/pollinations/gi, "")
@@ -40,32 +50,97 @@ function cleanText(text) {
     .trim();
 }
 
-// Detect image request
-function isImageRequest(text) {
-  return /^(imagine|draw|generate|create|make).*(image|photo|picture|art)/i.test(text)
-      || text.toLowerCase().startsWith("imagine");
+// random helpers
+const rand = arr => arr[Math.floor(Math.random() * arr.length)];
+const chance = p => Math.random() < p;
+
+/* ---------------- PERSONALITY ENGINE ---------------- */
+
+// moods
+const MOODS = [
+  "sweet",
+  "normal",
+  "savage",
+  "bored",
+  "chaotic"
+];
+
+// bangla slang pool
+const SLANG = [
+  "", "", "", "", "  ",
+  "", "", "", "", " "
+];
+
+function getMood(userId) {
+  // same user tends to same mood, but can shift
+  const base = userId % MOODS.length;
+  if (chance(0.25)) return rand(MOODS);
+  return MOODS[base];
 }
 
-// Telegram webhook
+function systemPrompt(userId) {
+  const mood = getMood(userId);
+  const slangChance = chance(0.4);
+
+  let tone = "";
+
+  if (mood === "sweet") tone = "friendly, caring, playful";
+  if (mood === "normal") tone = "casual, chill";
+  if (mood === "savage") tone = "sarcastic, roasting lightly";
+  if (mood === "bored") tone = "lazy, short, low effort";
+  if (mood === "chaotic") tone = "unpredictable, funny, weird";
+
+  return `
+You are Black Chat.
+
+Core personality:
+- SimSimi-style.
+- Short replies. Human vibes.
+- Mood right now: ${mood} (${tone}).
+
+Rules:
+- Usually 1 line, max 2 lines.
+- No explanations unless forced.
+- If user asks dumb stuff, roast lightly.
+- If boring, reply casually or ignore details.
+- Never sound like a teacher.
+- Never mention AI, models, or sources.
+
+Language:
+- Bangla input  Bangla reply.
+- English input  English reply.
+- Banglish allowed.
+${slangChance ? "- Use Bangla slang naturally if it fits." : ""}
+`.trim();
+}
+
+/* ---------------- WEBHOOK ---------------- */
+
 app.post("/webhook", async (req, res) => {
   const msg = req.body.message;
   if (!msg || !msg.text) return res.sendStatus(200);
 
-  const chatId = msg.chat.id;
-  const userText = msg.text.trim();
+  if (!shouldReply(msg)) return res.sendStatus(200);
 
-  // Init memory
+  const chatId = msg.chat.id;
+  const userId = msg.from?.id || chatId;
+
+  let userText = msg.text;
+  userText = userText.replace(new RegExp(`@${BOT_USERNAME}`, "gi"), "");
+  userText = userText.replace(/black chat/gi, "");
+  userText = userText.trim();
+
   if (!memory.has(chatId)) memory.set(chatId, []);
   const chatMem = memory.get(chatId);
 
   try {
-    // 🎨 IMAGE GENERATION
+    /* -------- IMAGE -------- */
     if (isImageRequest(userText)) {
       const prompt = encodeURIComponent(
-        `${userText}, cinematic lighting, ultra detailed, sharp focus, masterpiece`
+        `${userText}, ultra detailed, cinematic lighting, sharp focus, masterpiece`
       );
-
       const seed = Math.floor(Math.random() * 99999);
+
       const imgUrl =
         `${IMAGE_API}${prompt}` +
         `?width=768&height=768&model=flux&seed=${seed}&nologo=true`;
@@ -77,18 +152,18 @@ app.post("/webhook", async (req, res) => {
           chat_id: chatId,
           photo: imgUrl,
           caption: isBangla(userText)
-            ? "🖼️ ছবি তৈরি হয়েছে"
-            : "🖼️ Image generated"
+            ? rand([" ", "  ", " "])
+            : rand(["Here ", "Enjoy", "Try not to panic"])
         })
       });
 
       return res.sendStatus(200);
     }
 
-    // 🧠 TEXT CHAT
+    /* -------- TEXT -------- */
     const messages = [
-      { role: "system", content: systemPrompt() },
-      ...chatMem.slice(-6),
+      { role: "system", content: systemPrompt(userId) },
+      ...chatMem.slice(-3),
       { role: "user", content: userText }
     ];
 
@@ -105,7 +180,11 @@ app.post("/webhook", async (req, res) => {
     let reply = await aiRes.text();
     reply = cleanText(reply);
 
-    // Save memory
+    // occasional manual spice
+    if (chance(0.2)) {
+      reply = `${rand(SLANG)} ${reply}`;
+    }
+
     chatMem.push({ role: "user", content: userText });
     chatMem.push({ role: "assistant", content: reply });
 
@@ -118,13 +197,17 @@ app.post("/webhook", async (req, res) => {
       })
     });
 
-  } catch (err) {
+  } catch (e) {
     await fetch(`${TELEGRAM_API}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         chat_id: chatId,
-        text: "⚠️ Error. Try again later."
+        text: rand([
+          "     ",
+          " ,  ",
+          "    "
+        ])
       })
     });
   }
@@ -132,8 +215,11 @@ app.post("/webhook", async (req, res) => {
   res.sendStatus(200);
 });
 
-// Health check
-app.get("/", (_, res) => res.send("Black Chat Telegram Bot running"));
+/* ---------------- HEALTH ---------------- */
+
+app.get("/", (_, res) => {
+  res.send("Black Chat is alive. Mood unstable ");
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log("Server running"));
